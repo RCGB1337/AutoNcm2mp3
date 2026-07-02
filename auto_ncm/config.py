@@ -70,9 +70,11 @@ class Config:
 
     def save(self, path: Path = CONFIG_PATH) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(
             json.dumps(asdict(self), ensure_ascii=False, indent=2), encoding="utf-8"
         )
+        tmp.replace(path)
         logger.debug("配置已保存到 %s", path)
 
     @classmethod

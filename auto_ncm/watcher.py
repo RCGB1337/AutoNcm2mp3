@@ -43,11 +43,19 @@ def _is_ncm(path: str) -> bool:
     return path.lower().endswith(".ncm")
 
 
-def _wait_until_stable(path: Path, timeout: float = 30.0, poll: float = 0.6) -> bool:
+def _wait_until_stable(path: Path, timeout: float = 30.0, poll: float = 0.3,
+                       skip_if_old: bool = False) -> bool:
     """等待文件大小稳定 (写入完成)。"""
-    last = -1
+    try:
+        st = path.stat()
+    except FileNotFoundError:
+        return False
+    if skip_if_old and time.time() - st.st_mtime > 5:
+        return st.st_size > 0
+    last = st.st_size
     deadline = time.time() + timeout
     while time.time() < deadline:
+        time.sleep(poll)
         try:
             size = path.stat().st_size
         except FileNotFoundError:
@@ -55,7 +63,6 @@ def _wait_until_stable(path: Path, timeout: float = 30.0, poll: float = 0.6) -> 
         if size == last and size > 0:
             return True
         last = size
-        time.sleep(poll)
     logger.warning("等待文件稳定超时: %s", path)
     return False
 
@@ -93,14 +100,14 @@ class NcmWatcher:
     # 任务提交
     # ------------------------------------------------------------------
 
-    def submit(self, path: str) -> None:
+    def submit(self, path: str, *, skip_stable_wait: bool = False) -> None:
         """提交一个 NCM 文件到转换队列 (内部去重)。"""
         norm = os.path.normcase(os.path.abspath(path))
         with self._lock:
             if norm in self._inflight:
                 return
             self._inflight.add(norm)
-        self._executor.submit(self._run_one, path, norm)
+        self._executor.submit(self._run_one, path, norm, skip_stable_wait)
 
     def scan_existing(self) -> int:
         """扫描下载目录里已有的 NCM 文件并提交。"""
@@ -111,7 +118,7 @@ class NcmWatcher:
             return 0
         count = 0
         for p in root.rglob("*.ncm"):
-            self.submit(str(p))
+            self.submit(str(p), skip_stable_wait=True)
             count += 1
         return count
 
@@ -126,14 +133,13 @@ class NcmWatcher:
             except Exception:  # noqa: BLE001
                 logger.exception("回调异常")
 
-    def _run_one(self, path: str, norm_key: str) -> None:
+    def _run_one(self, path: str, norm_key: str, skip_stable_wait: bool = False) -> None:
         try:
             self._emit("start", path)
             p = Path(path)
             if not p.exists():
-                # 可能是临时事件，文件已经被重命名走
                 return
-            if not _wait_until_stable(p):
+            if not _wait_until_stable(p, skip_if_old=skip_stable_wait):
                 self._emit("error", path, error=RuntimeError("文件长时间未写入完成"))
                 return
             try:
@@ -157,24 +163,26 @@ class NcmWatcher:
     # ------------------------------------------------------------------
 
     def start(self) -> None:
-        if self._observer is not None:
-            return
-        if not self.cfg.download_dir or not Path(self.cfg.download_dir).is_dir():
-            logger.warning("下载目录无效，监控未启动: %r", self.cfg.download_dir)
-            return
-        observer = Observer()
-        observer.schedule(_Handler(self), self.cfg.download_dir, recursive=True)
-        observer.daemon = True
-        observer.start()
-        self._observer = observer
-        logger.info("已开始监控: %s", self.cfg.download_dir)
+        with self._lock:
+            if self._observer is not None:
+                return
+            if not self.cfg.download_dir or not Path(self.cfg.download_dir).is_dir():
+                logger.warning("下载目录无效，监控未启动: %r", self.cfg.download_dir)
+                return
+            observer = Observer()
+            observer.schedule(_Handler(self), self.cfg.download_dir, recursive=True)
+            observer.daemon = True
+            observer.start()
+            self._observer = observer
+            logger.info("已开始监控: %s", self.cfg.download_dir)
 
     def stop(self) -> None:
-        if self._observer is not None:
-            self._observer.stop()
-            self._observer.join(timeout=3)
-            self._observer = None
-            logger.info("监控已停止")
+        with self._lock:
+            if self._observer is not None:
+                self._observer.stop()
+                self._observer.join(timeout=3)
+                self._observer = None
+                logger.info("监控已停止")
 
     def shutdown(self) -> None:
         """彻底关闭 (用于程序退出)。"""

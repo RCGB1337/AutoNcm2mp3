@@ -12,6 +12,7 @@ import logging
 import os
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -46,13 +47,36 @@ class ConvertResult:
 
 def _ffmpeg_path() -> Optional[str]:
     """返回可用的 ffmpeg 可执行文件路径，找不到时返回 None。"""
-    # 1) 同目录下 (打包后) 自带的 ffmpeg
-    bundled = Path(__file__).resolve().parent.parent / "ffmpeg" / "ffmpeg.exe"
-    if bundled.is_file():
-        return str(bundled)
-    # 2) PATH 中的 ffmpeg
-    found = shutil.which("ffmpeg")
-    return found
+    candidates: list[Path] = []
+    # 1) 打包后: exe 同级的 ffmpeg 子目录
+    if getattr(sys, "frozen", False):
+        candidates.append(Path(sys.executable).resolve().parent / "ffmpeg" / "ffmpeg.exe")
+    # 2) 开发模式: 仓库根目录的 ffmpeg 子目录
+    candidates.append(Path(__file__).resolve().parent.parent / "ffmpeg" / "ffmpeg.exe")
+    for p in candidates:
+        if p.is_file():
+            return str(p)
+    # 3) PATH 中的 ffmpeg
+    return shutil.which("ffmpeg")
+
+
+# ---------------------------------------------------------------------------
+# Shell 通知 (让资源管理器刷新)
+# ---------------------------------------------------------------------------
+
+_SHCNE_CREATE = 0x00000002
+_SHCNF_PATHW = 0x0005
+
+def _notify_shell(path: Path) -> None:
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        ctypes.windll.shell32.SHChangeNotify(
+            _SHCNE_CREATE, _SHCNF_PATHW, str(path), None
+        )
+    except Exception:  # noqa: BLE001
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -190,10 +214,10 @@ def _dispose_source(src: Path, policy: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _build_output_path(src: Path, cfg: Config, target_ext: str) -> Path:
+def _build_output_path(src: Path, output_dir: str, target_ext: str) -> Path:
     """根据配置选择输出目录与文件名。"""
-    if cfg.output_dir:
-        out_dir = Path(cfg.output_dir)
+    if output_dir:
+        out_dir = Path(output_dir)
     else:
         out_dir = src.parent
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -243,6 +267,12 @@ def convert_one(path: str | os.PathLike, cfg: Config) -> ConvertResult:
     if not src.is_file():
         raise ConvertError(f"文件不存在: {src}")
 
+    # 快照配置，避免 GUI 线程中途修改导致不一致 (#8)
+    force_mp3 = cfg.force_mp3
+    mp3_bitrate = cfg.mp3_bitrate
+    on_success = cfg.on_success
+    output_dir = cfg.output_dir
+
     try:
         result = decode_ncm(src)
     except NcmDecodeError as exc:
@@ -250,41 +280,45 @@ def convert_one(path: str | os.PathLike, cfg: Config) -> ConvertResult:
 
     title, artists = _meta_text(result.meta)
     target_ext = result.fmt
-    intermediate_path: Optional[Path] = None
 
     # 计算目标路径
-    final_ext = "mp3" if (cfg.force_mp3 and target_ext == "flac") else target_ext
-    final_path = _build_output_path(src, cfg, final_ext)
+    final_ext = "mp3" if (force_mp3 and target_ext == "flac") else target_ext
+    final_path = _build_output_path(src, output_dir, final_ext)
+    tmp_output = final_path.with_suffix(final_path.suffix + ".tmp")
 
-    if cfg.force_mp3 and target_ext == "flac":
+    if force_mp3 and target_ext == "flac":
         # 先把 FLAC 写到临时文件再转 MP3
         intermediate_path = final_path.with_name(final_path.stem + ".tmp.flac")
         intermediate_path.write_bytes(result.audio)
         try:
-            _embed_flac_tags(intermediate_path, result)
-            _flac_to_mp3(intermediate_path, final_path, cfg.mp3_bitrate)
+            _flac_to_mp3(intermediate_path, tmp_output, mp3_bitrate)
         finally:
             try:
                 if intermediate_path.exists():
                     intermediate_path.unlink()
             except OSError:
                 pass
-        # ffmpeg -map_metadata 已经迁移了大部分标签，但封面在某些版本里需要重写
         try:
-            _embed_mp3_tags(final_path, result)
+            _embed_mp3_tags(tmp_output, result)
         except Exception as exc:  # noqa: BLE001
             logger.debug("MP3 标签补写失败 (可忽略): %s", exc)
     else:
-        final_path.write_bytes(result.audio)
+        tmp_output.write_bytes(result.audio)
+        if tmp_output.stat().st_size != len(result.audio):
+            tmp_output.unlink(missing_ok=True)
+            raise ConvertError("写入不完整，磁盘可能已满")
         try:
             if final_ext == "mp3":
-                _embed_mp3_tags(final_path, result)
+                _embed_mp3_tags(tmp_output, result)
             else:
-                _embed_flac_tags(final_path, result)
+                _embed_flac_tags(tmp_output, result)
         except Exception as exc:  # noqa: BLE001
             logger.warning("写入标签失败 (可忽略): %s", exc)
 
-    _dispose_source(src, cfg.on_success)
+    # 原子替换到最终路径
+    tmp_output.replace(final_path)
+    _notify_shell(final_path)
+    _dispose_source(src, on_success)
 
     return ConvertResult(
         src=src,

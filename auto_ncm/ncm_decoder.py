@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 from typing import BinaryIO, Optional
 
 from Crypto.Cipher import AES
+from Crypto.Util.strxor import strxor
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +70,8 @@ def _unpad(data: bytes) -> bytes:
     """去除 PKCS#7 填充。"""
     pad = data[-1]
     if pad < 1 or pad > 16:
-        # 数据可能没有填充，直接返回
+        return data
+    if data[-pad:] != bytes([pad]) * pad:
         return data
     return data[:-pad]
 
@@ -159,19 +161,17 @@ def _build_keybox(rc4_key: bytes) -> bytes:
     return bytes(keybox)
 
 
-def _decrypt_audio(fp: BinaryIO, keybox: bytes, chunk: int = 0x8000) -> bytes:
-    """流式解密剩余的音频数据 (XOR keybox)。"""
-    out = bytearray()
-    # 让每一块从字节偏移 0 开始，因此 keybox 索引就是块内位置 i & 0xff
+def _decrypt_audio(fp: BinaryIO, keybox: bytes, chunk: int = 1 << 20) -> bytes:
+    """流式解密剩余的音频数据 (整块 XOR keybox, C 实现)。"""
+    assert chunk % 256 == 0
+    ks = keybox * (chunk // 256)
+    out: list[bytes] = []
     while True:
         block = fp.read(chunk)
         if not block:
             break
-        decrypted = bytearray(len(block))
-        for i, b in enumerate(block):
-            decrypted[i] = b ^ keybox[i & 0xFF]
-        out.extend(decrypted)
-    return bytes(out)
+        out.append(strxor(block, ks[: len(block)]))
+    return b"".join(out)
 
 
 def _detect_format(audio: bytes, meta: dict) -> str:

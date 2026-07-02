@@ -467,6 +467,8 @@ class Dropdown(tk.Frame):
         self._var = textvariable
         self._values = list(values)
         self._hover = False
+        self._menu_open = False
+        self._last_close_time = 0.0
 
         # 主体: 文字 + chevron
         self._inner = tk.Frame(self, bg=Theme.SURFACE_ALT)
@@ -519,6 +521,9 @@ class Dropdown(tk.Frame):
     # --- 弹出原生菜单 ---
 
     def _on_click(self, _evt) -> None:
+        # 如果菜单刚刚关闭（<200ms），视为"点击收回"，不再弹出
+        if time.time() - self._last_close_time < 0.2:
+            return
         family = self._family
         menu = tk.Menu(
             self,
@@ -540,10 +545,13 @@ class Dropdown(tk.Frame):
         # 弹在触发器正下方
         x = self.winfo_rootx()
         y = self.winfo_rooty() + self.winfo_height() + 2
+        self._menu_open = True
         try:
             menu.tk_popup(x, y)
         finally:
             menu.grab_release()
+            self._menu_open = False
+            self._last_close_time = time.time()
 
     def _select(self, value: str) -> None:
         self._var.set(value)
@@ -1119,8 +1127,8 @@ class App:
             self._success_count += 1
             who = result.title if result else name
             artists = f"  ·  {result.artists}" if result and result.artists else ""
-            dst = result.dst.name if result else ""
-            self._log("ok", f"✓ {who}{artists}    {dst}")
+            dst = str(result.dst) if result else ""
+            self._log("ok", f"✓ {who}{artists}    → {dst}")
         elif stage == "error":
             self._error_count += 1
             self._log("err", f"✗ {name}    {error}")

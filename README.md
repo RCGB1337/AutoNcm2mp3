@@ -1,4 +1,20 @@
-# AutoNcm2Mp3 by https://blog.mer3y.xyz 视频教程:BV1nS96BSEGa
+<div align="center">
+
+# 🎵 AutoNcm2Mp3
+
+**网易云音乐 NCM 自动转换工具 — 下载即转，全程无感**
+
+[![GitHub stars](https://img.shields.io/github/stars/Mer3y1338/AutoNcm2mp3?style=flat-square)](https://github.com/Mer3y1338/AutoNcm2mp3/stargazers)
+[![GitHub release](https://img.shields.io/github/v/release/Mer3y1338/AutoNcm2mp3?style=flat-square)](https://github.com/Mer3y1338/AutoNcm2mp3/releases/latest)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](LICENSE)
+[![Python](https://img.shields.io/badge/Python-3.8+-blue?style=flat-square&logo=python&logoColor=white)](https://python.org)
+[![Platform](https://img.shields.io/badge/Platform-Windows-0078D6?style=flat-square&logo=windows)](https://github.com/Mer3y1338/AutoNcm2mp3/releases)
+
+[📺 视频教程 (BV1nS96BSEGa)](https://www.bilibili.com/video/BV1nS96BSEGa) · [⬇️ 下载 exe](https://github.com/Mer3y1338/AutoNcm2mp3/releases/latest) · [🐛 Issues](https://github.com/Mer3y1338/AutoNcm2mp3/issues)
+
+</div>
+
+---
 
 > 配置好网易云下载路径，下载完成后自动把 `.ncm` 转成 `.mp3` / `.flac`，
 > 轻量、绿色、开箱即用。
